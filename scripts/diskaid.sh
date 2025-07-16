@@ -3,7 +3,7 @@ set -euo pipefail
 
 declare -A MSG=(
 	[must_root]="This script must be run as root or with sudo."
-	[smartctl_err]="This script uses smartctl, it is not installed. Please install smartmontools first."
+	[missing_dep]="This script using %s, it is missing, install it!"
 	[cannot_read_utils]="Error: Cannot locate or read utils file at %s"
 	[invalid_options]="Invalid options. Use -h/--help for usage."
 	[missing_input]="Error: missing -m|--mnt-pnt <mount_point> or -p| --partition <disk> or -h/--help"
@@ -20,7 +20,7 @@ declare -A MSG=(
 	[test_init]="Smart self test initiated for %s"
 	[wait_info]="Waiting %s seconds for test to complete..."
 	[wait_err]="Test may have already completed or invalid date format."
-	[health_check_err]="Healt check error: \n%s"
+	[health_check_warn]="Healt check warning: \n%s"
 	[badlock_info]="Badlock check initiated"
 	[disk_in_use]="Please stop using this disk '%s': %s"
 	[unmounting]="Unmounting %s volume at %s"
@@ -126,10 +126,13 @@ fi
 
 source "$UTILS"
 
-if ! command -v smartctl >/dev/null 2>&1; then
-	error "${MSG[smartctl_err]}"
-	exit 1
-fi
+check_dep() {
+	local cmd="$1"
+	if ! command -v "$cmd" &>/dev/null; then
+		error "${MSG[missing_dep]}" "$cmd"
+		exit 1
+	fi
+}
 
 PARSED=$(getopt -o hfcbm:p:t: -l help,fix,check,badlock,mnt-pnt:,partition:test: -- "$@") || {
 	echo "${MSG[invalid_options]}" >&2
@@ -294,12 +297,20 @@ unmount() {
 }
 
 if ((CHK)); then
-	info "${MSG[health_check]}"
+	check_dep smartctl
 
-	smartctl -a -d "$SMART_TYPE" "$DEVICE" || error "${MSG[health_check_err]}"
+	info "${MSG[health_check]}" "$DEVICE"
+
+	if ! HLTH=$(smartctl -a -d "$SMART_TYPE" "$DEVICE" 2>&1); then
+		warning "${MSG[health_check_warn]}" "$HLTH"
+	else
+		info "$HLTH"
+	fi
 fi
 
 if ((BDLCK)); then
+	check_dep "badblocks"
+
 	check_usage
 	unmount
 	info "${MSG[badlock_info]}"
@@ -342,6 +353,8 @@ if ((FIX)); then
 
 	case "$FSTYPE" in
 	ext2 | ext3 | ext4)
+		check_dep "e2fsck"
+
 		info "${MSG[dry_check]}"
 		e2fsck -n "$PART"
 
@@ -351,6 +364,8 @@ if ((FIX)); then
 		e2fsck -c -c -y "$PART"
 		;;
 	xfs)
+		check_dep "xfs_repair"
+
 		info "${MSG[dry_check]}"
 		xfs_repair -n "$PART"
 
@@ -360,6 +375,8 @@ if ((FIX)); then
 		xfs_repair "$PART"
 		;;
 	ntfs)
+		check_dep "ntfsfix"
+
 		info "${MSG[running_ntfsfix]}" "$PART"
 		ntfsfix "$PART"
 		;;
@@ -369,7 +386,7 @@ if ((FIX)); then
 	esac
 fi
 
-if [[ -z "$(resolve_pair "$MNT" m)" ]]; then
+if [[ -z "$(resolve_pair "$MNT" p)" ]]; then
 
 	if [[ ! -d "$MNT" ]]; then
 		info "${MSG[creating_mountdir]}" "$MNT"

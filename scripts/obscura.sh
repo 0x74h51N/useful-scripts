@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# scripts/encode.sh
 
 set -euo pipefail
 
