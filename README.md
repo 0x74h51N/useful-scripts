@@ -9,24 +9,24 @@ All scripts aim to be clean, modular, and probably over engineered for what they
 Feel free to use them, break them, criticise them, or reach out if you have feedback.
 
 
-### Scripts
+## Scripts
 
-- `diskaid.sh`  
+- ### `diskaid.sh`  
   Performs health checks and basic repair operations on disk partitions using tools like `smartctl`, `fsck`, `xfs_repair`, and `ntfsfix`. Mostly used it to fix stupid Windows dirty NTFS mounts, I improved it a little bit more.
 
 
-- `obscura.sh` 
-Encrypts or decrypts strings and files using AES-256-CBC with PBKDF2, supporting both CLI and interactive modes, useful for encode/decode casual secrets.
+- ### `obscura.sh`
+  Encrypts or decrypts strings and files using AES-256-CBC with PBKDF2, supporting both CLI and interactive modes, useful for encode/decode casual secrets.
     
 
-- `backup-cron-worker.sh`
+- ### `backup-cron-worker.sh`
     TODO
 
 
-- `dns-over-tls.sh`
+- ### `dns-over-tls.sh`
     TODO
 
 
-- `nvim-starter.sh`  
+- ### `nvim-starter.sh`  
   Setup commonly used plugins and configs.  
   TODO
