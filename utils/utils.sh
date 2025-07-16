@@ -24,7 +24,7 @@ info() {
 warning() {
 	local inner
 	inner=$(printf "$1" "${@:2}")
-	printf "${YELLOW}%b${RESET}\n" "$inner" >&2
+	printf "${YELLOW}Warning:${RESET} %b\n" "$inner" >&2
 }
 
 check_input() {
