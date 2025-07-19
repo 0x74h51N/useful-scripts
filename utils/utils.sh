@@ -27,6 +27,32 @@ warning() {
 	printf "${YELLOW}Warning:${RESET} %b\n" "$inner" >&2
 }
 
+check_dep() {
+	local cmd="$1"
+	if ! command -v "$cmd" &>/dev/null; then
+		error "${MSG[missing_dep]}" "$cmd"
+		exit 1
+	fi
+}
+
+require_arg() {
+	local opt="$1"
+	local val="$2"
+	local allowed="${3:-}"
+
+	if [[ -z "$val" || "$val" == -* ]]; then
+		error "Missing or invalid argument for $opt"
+		exit 1
+	fi
+
+	if [[ -n "$allowed" ]]; then
+		if ! [[ "$val" =~ ^($allowed)$ ]]; then
+			error "Invalid value for $opt: '$val' (allowed: $allowed)"
+			exit 1
+		fi
+	fi
+}
+
 check_input() {
 	local input="$1"
 

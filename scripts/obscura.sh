@@ -49,17 +49,19 @@ Usage: $0 (-e | -d) [INPUT] [OPTIONS]
   Interactive Mode:
     -i, --interactive      Runs interactive mode for decode/encode
 
-  INPUT (mutually exclusive, one required):
+   INPUT:
     -I, --in-file FILE     Read plaintext/ciphertext from FILE
-    -s, --in-str  STR      Use STR as plaintext/ciphertext
+    -s, --in-str  STR      Use STR directly as plaintext/ciphertext
+                           If neither -I nor -s is given you will be prompted (hidden inpt).
 
   Mode (mutually exclusive, one required):
     -e, --encode           Encrypt INPUT (AES-256-CBC + PBKDF2-SHA256, base64)
     -d, --decode           Decrypt INPUT
 
-  Password (mutually exclusive, one required):
-    -P, --pass-file FILE   Read password from FILE
-    -x, --pass-str  STR    Use STR as password
+  Password:
+    -P, --pass-file FILE   Read password from FILE (file must be non-empty)
+                           If -P (with valid FILE argument) is not provided,
+                           the password is prompted (hidden).  
 
   Output:
     -O, --out-file FILE    Write result to FILE
@@ -69,23 +71,20 @@ Usage: $0 (-e | -d) [INPUT] [OPTIONS]
     -h, --help             Show this help message and exit
 
 Examples:
-  # Encrypt the contents of secret.txt, prompt pass interactively:
+   # Encrypt file; password from pass.txt:
   $0 -e -I secret.txt -P pass.txt
 
-  # Decrypt a base64 string with inline password, output to file:
-  $0 -d -s \"U2FsdGVkX1...\" -x \"myPassword\" -O decrypted.bin
+  # Encrypt file; prompt for password, write to stdout:
+  $0 -e -I secret.txt
 
-  # Read plaintext from STDIN, write cipher to STDOUT (no flags for output):
-  echo \"hello\" | $0 -e -s \"hello\" -P pass.txt
+  # Encode with prompted inline string (no argument after -s):
+  $0 -e -s
 
 EOF
 }
 
 #just in case
-if ! command -v openssl &>/dev/null; then
-	error "openssl not found! Please install it first."
-	exit 127
-fi
+check_dep openssl
 
 #openssl encode/decode options:
 declare -r BASE_CMD=(openssl enc -aes-256-cbc -pbkdf2 -md sha256 -a -A -pass stdin)
@@ -98,7 +97,7 @@ declare -A MSG=(
 	[ask_file]="Data from file? (y/N):"
 	[secret_key_fil]="Secret key is on file? (y/N)"
 	[ask_secret]="Enter your secret key or q to cancel:"
-	[ask_input]="Enter input string:"
+	[ask_secret_string]="Enter your super secret string:"
 	[ask_write]="Do you want to write data to file? (y/N):"
 	[err_empty]="Input cannot be empty."
 	[err_invalid]="Invalid data or unknown error:"
@@ -131,7 +130,7 @@ coder() {
 	if [[ $useFile =~ $yesPattern ]]; then
 		input=$(get_file_name) || exit 1
 	else
-		input_str=$(get_input "${MSG[ask_input]}") || exit 1
+		input_str=$(get_input "${MSG[ask_secret_string]}" 1) || exit 1
 		input=$(create_temp_file "$input_str")
 	fi
 
@@ -185,7 +184,7 @@ coder() {
 
 user_friendly() {
 	echo "$BANNER"
-	sleep 1
+	sleep 0.5
 
 	while true; do
 		printf "${MSG[prompt_select]} \n%s\n%s\n%s\n" \
@@ -197,21 +196,22 @@ user_friendly() {
 		case "$prcs" in
 		1)
 			mode="encode"
-			coder
+			break
 			;;
 		2)
 			mode="decode"
-			coder
+			break
 			;;
 		3)
 			warning "${MSG[exit_msg]}"
-			break
+			exit 0
 			;;
 		*)
 			warning "${MSG[warn_inv_opt]}"
 			;;
 		esac
 	done
+	coder
 }
 
 if [[ "${1-}" == "-i" || "${1-}" == "--interactive" ]]; then
@@ -221,8 +221,8 @@ if [[ "${1-}" == "-i" || "${1-}" == "--interactive" ]]; then
 fi
 
 PARSED=$(getopt \
-	-o dehI:s:O:P:x \
-	-l decode,encode,help,in-file:,in-str:,out-file:,pass-file:,pass-str \
+	-o dehI:O:P:s: \
+	-l decode,encode,help,in-file:,in-str:,out-file:,pass-file: \
 	-- "$@") || {
 	error "${MSG[err_inv_flag]}"
 	exit 1
@@ -252,28 +252,24 @@ while true; do
 		shift
 		;;
 	-I | --in-file)
+		require_arg "-I/--in-file" "$2"
 		input_file="$2"
 		shift 2
 		;;
 	-s | --in-str)
+		require_arg "-s/--in-str" "$2"
 		input_str="$2"
 		shift 2
 		;;
 	-O | --out-file)
+		require_arg "-O/--out-file" "$2"
 		file_output="$2"
 		shift 2
 		;;
 	-P | --pass-file)
+		require_arg "-P/--pass-file" "$2"
 		pass_file="$2"
 		shift 2
-		;;
-	-x | --pass-str)
-		if [[ "$mode" == "encode" ]]; then
-			pass_str=$(get_input "${MSG[ask_secret]}" 1 1) || exit 1
-		else
-			pass_str=$(get_input "${MSG[ask_secret]}" 1) || exit 1
-		fi
-		shift
 		;;
 	--)
 		shift
@@ -286,27 +282,29 @@ done
 non_interactive() {
 	local cmd=("${BASE_CMD[@]}")
 
+	#Check inputs
 	if [[ -z "$mode" ]]; then
 		error "${MSG[err_none_mode]}" >&2
 		exit 1
 	fi
 
 	if [[ -z "$input_file" && -z "$input_str" ]]; then
-		error "${MSG[err_none_inp]}" >&2
-		exit 1
+		input_str=$(get_input "${MSG[ask_secret_string]}" 1) || exit 1
+		[[ -n "$input_str" ]] && info "Super secret input taken." && sleep 0.5
 	elif [[ -n "$input_file" && -n "$input_str" ]]; then
 		error "${MSG[err_both_inp]}" >&2
 		exit 1
 	fi
 
-	if [[ -z "$pass_file" && -z "$pass_str" ]]; then
-		error "${MSG[err_none_pass]}" >&2
-		exit 1
-	elif [[ -n "$pass_file" && -n "$pass_str" ]]; then
-		error "${MSG[err_both_pass]}" >&2
-		exit 1
+	if [[ -z "$pass_file" ]]; then
+		if [[ "$mode" == "encode" ]]; then
+			pass_str=$(get_input "${MSG[ask_secret]}" 1 1) || exit 1
+		else
+			pass_str=$(get_input "${MSG[ask_secret]}" 1) || exit 1
+		fi
 	fi
 
+	#Process to inputs
 	if [[ -n "$input_file" ]]; then
 		check_file "$input_file" || exit 1
 		input="$input_file"
