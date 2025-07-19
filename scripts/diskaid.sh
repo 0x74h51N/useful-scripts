@@ -13,6 +13,7 @@ declare -A MSG=(
 	[unable_determine_device]="Unable to determine device for mount point '%s'."
 	[checking_partition]="Checking device partition for %s"
 	[health_check]="Healt check initiated for %s"
+	[health_check_fin]="Health check report:\n%s"
 	[test_type_err]="Invalid self-test argument: '%s'. Must be 'short' or 'long'."
 	[long_test_inf]="Long self-test may take up to an hour and could worsen failing disks."
 	[long_test_appr]="Proceed with long self-test on this device? (y/N): "
@@ -27,9 +28,13 @@ declare -A MSG=(
 	[failed_unmount]="Failed to unmount %s"
 	[creating_mountdir]="Creating mount point directory %s"
 	[failed_mkdir]="Failed to mkdir %s"
-	[running_fsck]="Running fsck.ext4 on %s"
 	[dry_check]="Running dry‑run filesystem check (no‑write)…"
+	[dry_check_comp]="Dry-run completed check to %s"
+	[dry_check_warn]="Dry-run reported issues (see %s)"
 	[fix_apprv]="Proceed with full repair (this may risk data loss)? (y/N): "
+	[running_fsck]="Running fsck.ext4 on %s"
+	[fsck_safe_comp]="fsck safe fixes completed."
+	[fsck_intr_appr]="Uncorrected errors. Run interactive fsck for fix? (y/N)"
 	[running_xfs]="Running xfs_repair on %s"
 	[running_ntfsfix]="Running ntfsfix on %s"
 	[no_repair_support]="No automatic repair support for filesystem type '%s'."
@@ -71,42 +76,40 @@ Usage: $0 -m <mount_point> [OPTIONS]
 
 Check (and optionally repair) a mounted filesystem.
 
-Required:
-  -m, --mnt-pnt DIR    Mount point to check (e.g. "/mnt/Partition Label")
-  
-      or
-  
-  -d, --device         Partition of disk to check (e.g. /dev/sdc1)
+  Required (mutually exclusive, one required):
+    -m, --mnt-pnt DIR    Mount point to check (e.g. "/mnt/Partition Label")
+    -p, --partition         Partition of disk to check (e.g. /dev/sdc1)
 
-Options:
- 
-  -c, --check
-        Run SMART health dump (smartctl -a).  Diagnostic only—no repairs.
 
-  -b, --badblock
-        Scan disk for unreadable sectors (badblocks -sv).  
-        Finds bad sectors but does not mark them on NTFS; use e2fsck -c for ext*
+  Options:
+    -c, --check
+          Run SMART health dump (smartctl -a).  Diagnostic only—no repairs.
 
-  -f, --fix
-        Repair filesystem metadata:
-          • ext2/3/4 → fsck.ext4 -y
-          • XFS      → xfs_repair
-          • NTFS     → ntfsfix  # Only metadata/journal repair, NOT full bad‑cluster fixes.
+    -b, --badblock
+          Scan disk for unreadable sectors (badblocks -sv).  
+          Finds bad sectors but does not mark them on NTFS; use e2fsck -c for ext*
 
-  -t, --test TYPE
-        Run SMART self‑test (short|long).  Test firmware‑level remapping.
+    -f, --fix
+          Repair filesystem metadata:
+            • ext2/3/4 → fsck.ext4 -y
+            • XFS      → xfs_repair
+            • NTFS     → ntfsfix  # Only metadata/journal repair, NOT full bad‑cluster fixes.
 
-  -h, --help           Show this help message and exit
+    -t, --test TYPE
+          Run SMART self‑test (short|long).  Test firmware‑level remapping.
 
-Examples:
-# Just check and remount read‑write
-  $0 -m /run/media/user/MyDisk
+    -h, --help           Show this help message and exit
 
-  # Run SMART check and self-test on a disk partition
-  $0 -p /dev/sda1 --check --test short
 
-  # Force repair via fsck or ntfsfix without mount path
-  $0 -p /dev/sdb1 --fix
+  Examples:
+  # Just check and remount read‑write
+    $0 -m /run/media/user/MyDisk
+
+    # Run SMART check and self-test on a disk partition
+    $0 -p /dev/sda1 --check --test short
+
+    # Force repair via fsck or ntfsfix without mount path
+    $0 -p /dev/sdb1 --fix
 EOF
 }
 
@@ -125,14 +128,6 @@ if [[ ! -r "$UTILS" ]]; then
 fi
 
 source "$UTILS"
-
-check_dep() {
-	local cmd="$1"
-	if ! command -v "$cmd" &>/dev/null; then
-		error "${MSG[missing_dep]}" "$cmd"
-		exit 1
-	fi
-}
 
 PARSED=$(getopt -o hfcbm:p:t: -l help,fix,check,badlock,mnt-pnt:,partition:test: -- "$@") || {
 	echo "${MSG[invalid_options]}" >&2
@@ -158,6 +153,7 @@ while true; do
 		exit 0
 		;;
 	-m | --mnt-pnt)
+		require_arg "-m/--mnt-pnt" "$2"
 		MNT="$2"
 		shift 2
 		;;
@@ -170,11 +166,13 @@ while true; do
 		shift
 		;;
 	-t | --test)
+		require_arg "-t/--test" "$2" "short|long"
 		TST=1
 		TESTt="$2"
 		shift 2
 		;;
 	-p | --partition)
+		require_arg "-p/--partition" "$2"
 		PART="$2"
 		shift 2
 		;;
@@ -304,7 +302,7 @@ if ((CHK)); then
 	if ! HLTH=$(smartctl -a -d "$SMART_TYPE" "$DEVICE" 2>&1); then
 		warning "${MSG[health_check_warn]}" "$HLTH"
 	else
-		info "$HLTH"
+		info "${MSG[health_check_fin]}" "$HLTH"
 	fi
 fi
 
@@ -346,37 +344,67 @@ if ((TST)); then
 	smartctl -a -d "$SMART_TYPE" "$DEVICE"
 fi
 
+# Dangerous area-
+# dry diagnostics first,
+# read_only repair runs only after approval
 if ((FIX)); then
 
 	check_usage
 	unmount
 
+	ts=$(date +%d-%m-%Y)
+
 	case "$FSTYPE" in
 	ext2 | ext3 | ext4)
 		check_dep "e2fsck"
+		report="fscheck-${PART##*/}-$ts.txt"
 
 		info "${MSG[dry_check]}"
-		e2fsck -n "$PART"
+		if ! e2fsck -n "$PART" >"$report" 2>&1; then
+			warning "${MSG[dry_check_warn]}" "$report"
+		else
+			info "${MSG[dry_check_comp]}" "$report"
+		fi
 
 		approve "${MSG[fix_apprv]}"
 
 		info "${MSG[running_fsck]}" "$PART"
-		e2fsck -c -c -y "$PART"
+
+		set +e
+		e2fsck -p "$PART"
+		rc=$?
+		set -e
+
+		if ((rc == 0 || rc == 1)); then
+			info "${MSG[fsck_safe_comp]}"
+		elif ((rc == 4)); then
+			approve "${MSG[fsck_intr_appr]}" || exit 1
+			e2fsck "$PART"
+			exit $?
+		else
+			error "Error code %s" "$rc"
+			exit 1
+		fi
 		;;
 	xfs)
 		check_dep "xfs_repair"
+		report="xfscheck-${PART##*/}-$ts.txt"
 
 		info "${MSG[dry_check]}"
-		xfs_repair -n "$PART"
+		if ! xfs_repair -n "$PART" >"$report" 2>&1; then
+			warning "${MSG[dry_check_warn]}" "$report"
+		else
+			info "${MSG[dry_check_comp]}" "$report"
+		fi
 
 		approve "${MSG[fix_apprv]}"
-
-		info "${MSG[running_xfs]}" "$PART"
+		info "${MSG[running_xfs]}"
 		xfs_repair "$PART"
 		;;
 	ntfs)
 		check_dep "ntfsfix"
 
+		#NTFS fix only for filesystem
 		info "${MSG[running_ntfsfix]}" "$PART"
 		ntfsfix "$PART"
 		;;
@@ -386,6 +414,7 @@ if ((FIX)); then
 	esac
 fi
 
+#last mount if unmount
 if [[ -z "$(resolve_pair "$MNT" p)" ]]; then
 
 	if [[ ! -d "$MNT" ]]; then
