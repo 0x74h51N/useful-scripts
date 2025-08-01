@@ -4,7 +4,8 @@ set -euo pipefail
 
 trap 'echo "[DEBUG ERR] Line $LINENO: \"$BASH_COMMAND\" exited with status $?" >&2' ERR
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RPATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$RPATH")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 UTILS="$ROOT_DIR/utils/utils.sh"
 

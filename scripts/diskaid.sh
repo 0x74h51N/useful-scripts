@@ -84,19 +84,23 @@ Check (and optionally repair) a mounted filesystem.
   Options:
     -c, --check
           Run SMART health dump (smartctl -a).  Diagnostic only—no repairs.
+          Requires root privileges.
 
     -b, --badblock
           Scan disk for unreadable sectors (badblocks -sv).  
           Finds bad sectors but does not mark them on NTFS; use e2fsck -c for ext*
-
+          Requires root privileges. Will unmount and re-mount the disk.
+ 
     -f, --fix
           Repair filesystem metadata:
             • ext2/3/4 → fsck.ext4 -y
             • XFS      → xfs_repair
             • NTFS     → ntfsfix  # Only metadata/journal repair, NOT full bad‑cluster fixes.
+          Requires root privileges. Will unmount and re-mount the disk.
 
     -t, --test TYPE
           Run SMART self‑test (short|long).  Test firmware‑level remapping.
+          Requires root privileges. Will unmount and re-mount the disk.
 
     -h, --help           Show this help message and exit
 
@@ -113,12 +117,8 @@ Check (and optionally repair) a mounted filesystem.
 EOF
 }
 
-if ((EUID != 0)); then
-	error "${MSG[must_root]}"
-	exit 1
-fi
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RPATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$RPATH")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 UTILS="$ROOT_DIR/utils/utils.sh"
 
@@ -128,6 +128,13 @@ if [[ ! -r "$UTILS" ]]; then
 fi
 
 source "$UTILS"
+
+require_root() {
+	((EUID == 0)) || {
+		error "${MSG[must_root]}"
+		exit 1
+	}
+}
 
 PARSED=$(getopt -o hfcbm:p:t: -l help,fix,check,badlock,mnt-pnt:,partition:test: -- "$@") || {
 	echo "${MSG[invalid_options]}" >&2
@@ -158,14 +165,17 @@ while true; do
 		shift 2
 		;;
 	-c | --check)
+		require_root
 		CHK=1
 		shift
 		;;
 	-b | --badlock)
+		require_root
 		BDLCK=1
 		shift
 		;;
 	-t | --test)
+		require_root
 		require_arg "-t/--test" "$2" "short|long"
 		TST=1
 		TESTt="$2"
@@ -177,6 +187,7 @@ while true; do
 		shift 2
 		;;
 	-f | --fix)
+		require_root
 		FIX=1
 		shift
 		;;
@@ -344,9 +355,9 @@ if ((TST)); then
 	smartctl -a -d "$SMART_TYPE" "$DEVICE"
 fi
 
-# Dangerous area-
-# dry diagnostics first,
-# read_only repair runs only after approval
+# Dangerous area —
+# Run dry diagnostic first,
+# then write-mode repair only after approval
 if ((FIX)); then
 
 	check_usage
